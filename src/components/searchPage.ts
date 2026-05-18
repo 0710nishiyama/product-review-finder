@@ -86,7 +86,7 @@ export class SearchPage {
   render(): void {
     this.container.innerHTML = `
       <h2 class="mb-3">商品レビュー検索</h2>
-      <div id="search-mode-selector" class="mb-3"></div>
+      <div id="search-mode-selector" class="mb-3" style="display:none;"></div>
       <div id="search-input-container" class="mb-3"></div>
       <div id="loading-overlay-container"></div>
       <div id="search-error-container"></div>

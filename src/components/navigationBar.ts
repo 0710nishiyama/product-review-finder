@@ -20,7 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { route: 'search', label: '検索' },
   { route: 'history', label: '履歴' },
   { route: 'favorites', label: 'お気に入り' },
-  { route: 'settings', label: '設定' },
+  // { route: 'settings', label: '設定' },  // AI機能は一時的に非表示
   { route: 'help', label: 'ヘルプ' },
 ];
 

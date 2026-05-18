@@ -63,14 +63,18 @@ function renderSidebarNav(activeRoute: Route): void {
   const sidebarNav = document.getElementById('sidebar-nav');
   if (!sidebarNav) return;
 
-  sidebarNav.innerHTML = router.getRoutes().map((route) => {
-    const isActive = route === activeRoute;
-    return `<li class="nav-item">
-      <a class="nav-link${isActive ? ' active' : ''}" href="#${route}" data-route="${route}">
-        ${ROUTE_LABELS[route]}
-      </a>
-    </li>`;
-  }).join('');
+  const hiddenRoutes: Route[] = ['settings']; // AI機能は一時的に非表示
+
+  sidebarNav.innerHTML = router.getRoutes()
+    .filter((route) => !hiddenRoutes.includes(route))
+    .map((route) => {
+      const isActive = route === activeRoute;
+      return `<li class="nav-item">
+        <a class="nav-link${isActive ? ' active' : ''}" href="#${route}" data-route="${route}">
+          ${ROUTE_LABELS[route]}
+        </a>
+      </li>`;
+    }).join('');
 }
 
 /**
