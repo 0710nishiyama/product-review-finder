@@ -45,19 +45,27 @@ const API_ENDPOINTS: Record<AIProvider, string> = {
 const AI_TIMEOUT_MS = 60000;
 
 /**
- * Determine the AI provider from the model name.
+ * Determine the AI provider from the model name or API key prefix.
  * Uses model naming conventions to identify the provider.
+ * Falls back to API key prefix detection if model is empty.
  */
-export function detectProvider(model: string): AIProvider {
-  const lowerModel = model.toLowerCase();
-  if (lowerModel.includes('gpt') || lowerModel.includes('o1') || lowerModel.includes('o3')) {
+export function detectProvider(modelOrKey: string): AIProvider {
+  const lower = modelOrKey.toLowerCase();
+  if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3')) {
     return 'openai';
   }
-  if (lowerModel.includes('gemini') || lowerModel.includes('palm')) {
+  if (lower.includes('gemini') || lower.includes('palm')) {
     return 'google';
   }
-  if (lowerModel.includes('claude')) {
+  if (lower.includes('claude')) {
     return 'claude';
+  }
+  // Try to detect from API key prefix
+  if (lower.startsWith('sk-')) {
+    return 'openai';
+  }
+  if (lower.startsWith('aig') || lower.startsWith('ai')) {
+    return 'google';
   }
   // Default to openai if provider cannot be determined
   return 'openai';
@@ -66,15 +74,31 @@ export function detectProvider(model: string): AIProvider {
 /**
  * Validate AI provider settings before making API calls.
  * Returns a warning message if settings are invalid, or null if valid.
+ * Model is optional - defaults will be used if not specified.
  */
 export function validateAIConfig(settings: AIProviderConfig): string | null {
   if (!settings.api_key || settings.api_key.trim().length === 0) {
     return 'APIキーが未設定です。設定画面でapi_keyを入力してください。';
   }
-  if (!settings.model || settings.model.trim().length === 0) {
-    return 'モデル名が未設定です。設定画面でmodelを入力してください。';
-  }
   return null;
+}
+
+/** Default models for each provider */
+const DEFAULT_MODELS: Record<AIProvider, string> = {
+  openai: 'gpt-4o-mini',
+  google: 'gemini-1.5-flash',
+  claude: 'claude-3-5-sonnet-20241022',
+};
+
+/**
+ * Get the model to use, falling back to default if not specified.
+ */
+function getModelOrDefault(settings: AIProviderConfig): string {
+  if (settings.model && settings.model.trim().length > 0) {
+    return settings.model;
+  }
+  const provider = detectProvider(settings.model || settings.api_key);
+  return DEFAULT_MODELS[provider];
 }
 
 /**
@@ -476,15 +500,16 @@ export class AIAnalyzer implements IAIAnalyzer {
       };
     }
 
-    const provider = detectProvider(settings.model);
+    const provider = detectProvider(settings.model || settings.api_key);
 
     try {
       const imageBase64 = await fileToBase64(image);
       const mimeType = image.type || 'image/jpeg';
+      const model = getModelOrDefault(settings);
 
       const { url, options } = buildImageRequestForProvider(
         provider,
-        settings.model,
+        model,
         settings.api_key,
         imageBase64,
         mimeType
@@ -575,7 +600,7 @@ export class AIAnalyzer implements IAIAnalyzer {
       };
     }
 
-    const provider = detectProvider(settings.model);
+    const provider = detectProvider(settings.model || settings.api_key);
 
     try {
       const reviewTexts = reviews
@@ -596,9 +621,11 @@ ${reviewTexts}
 
 average_ratingはレビュー全体の平均評価、credibility_scoreはレビューの信憑性・信頼性の推定値（0〜100）、summary_textは全体の傾向をまとめた要約です。`;
 
+      const model = getModelOrDefault(settings);
+
       const { url, options } = buildRequestForProvider(
         provider,
-        settings.model,
+        model,
         settings.api_key,
         prompt
       );
@@ -675,7 +702,7 @@ average_ratingはレビュー全体の平均評価、credibility_scoreはレビ�
       return [];
     }
 
-    const provider = detectProvider(settings.model);
+    const provider = detectProvider(settings.model || settings.api_key);
 
     try {
       const prompt = `以下の商品に関するレビュー情報を検索・分析してください。
@@ -696,9 +723,11 @@ average_ratingはレビュー全体の平均評価、credibility_scoreはレビ�
 
 各レビューは実在する可能性のある情報に基づいて生成してください。`;
 
+      const model = getModelOrDefault(settings);
+
       const { url, options } = buildRequestForProvider(
         provider,
-        settings.model,
+        model,
         settings.api_key,
         prompt
       );

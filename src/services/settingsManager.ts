@@ -66,7 +66,8 @@ export class SettingsManager implements ISettingsManager {
 
   /**
    * Validate AI settings for the active provider.
-   * Checks that api_key is non-empty and non-whitespace-only, and model is non-empty.
+   * Checks that api_key is non-empty and non-whitespace-only.
+   * Model is optional (defaults will be used if not specified).
    * Returns validation errors that include the field name.
    */
   validateSettings(settings: AISettings): ValidationResult {
@@ -80,16 +81,6 @@ export class SettingsManager implements ISettingsManager {
         code: 'API_KEY_REQUIRED',
         message: `${provider}のAPIキーを入力してください`,
         field: 'api_key',
-        retryable: false,
-      });
-    }
-
-    if (!config.model || config.model.length === 0) {
-      errors.push({
-        type: 'validation',
-        code: 'MODEL_REQUIRED',
-        message: `${provider}のモデル名を入力してください`,
-        field: 'model',
         retryable: false,
       });
     }

@@ -128,7 +128,7 @@ export class SettingsPage {
           </div>
 
           <div class="mb-3">
-            <label for="${provider.id}-model-input" class="form-label">モデル</label>
+            <label for="${provider.id}-model-input" class="form-label">モデル <span class="text-muted">(任意)</span></label>
             <input
               type="text"
               class="form-control${modelInvalid}"
@@ -138,6 +138,7 @@ export class SettingsPage {
               value="${this.escapeHtml(config.model)}"
               aria-describedby="${provider.id}-model-error"
             />
+            <div class="form-text">未入力の場合はデフォルトモデルが使用されます</div>
             <div id="${provider.id}-model-error" class="invalid-feedback" role="alert">
               ${modelError}
             </div>
@@ -217,48 +218,28 @@ export class SettingsPage {
   }
 
   /**
-   * Validate all provider settings using SettingsManager.validateSettings().
-   * For each provider, temporarily sets it as activeProvider to validate via the service.
-   * Displays inline validation errors from the service's ValidationResult.
-   * Returns true if all providers are valid.
+   * Validate only the active provider's settings.
+   * Only the active provider needs a valid API key.
+   * Model is optional (defaults will be used).
+   * Returns true if valid.
    */
   private validateAllProviders(settings: AISettings): boolean {
-    let hasErrors = false;
+    const result: ValidationResult = this.settingsManager.validateSettings(settings);
 
-    PROVIDERS.forEach((provider) => {
-      // Create a temporary settings object with this provider as active
-      // to leverage SettingsManager.validateSettings()
-      const tempSettings: AISettings = {
-        activeProvider: provider.id,
-        providers: settings.providers,
-      };
-
-      const result: ValidationResult = this.settingsManager.validateSettings(tempSettings);
-
-      if (!result.valid) {
-        hasErrors = true;
-        // Map validation errors to the UI fields
-        for (const error of result.errors) {
-          if (error.field === 'api_key') {
-            this.errors.set(
-              `${provider.id}_api_key`,
-              error.message
-            );
-          } else if (error.field === 'model') {
-            this.errors.set(
-              `${provider.id}_model`,
-              error.message
-            );
-          }
+    if (!result.valid) {
+      const provider = settings.activeProvider;
+      for (const error of result.errors) {
+        if (error.field === 'api_key') {
+          this.errors.set(`${provider}_api_key`, error.message);
+        } else if (error.field === 'model') {
+          this.errors.set(`${provider}_model`, error.message);
         }
       }
-    });
-
-    if (hasErrors) {
       this.displayAllErrors();
+      return false;
     }
 
-    return !hasErrors;
+    return true;
   }
 
   /**

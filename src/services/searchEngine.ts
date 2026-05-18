@@ -149,7 +149,7 @@ export class SearchEngine implements ISearchEngine {
 
       // Build AI settings output
       const aiSettingsOutput: AISettingsOutput = {
-        model: providerConfig.model,
+        model: providerConfig.model || 'default',
         confidence_threshold: 0.7, // Default confidence threshold
       };
 
