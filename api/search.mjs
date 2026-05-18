@@ -97,7 +97,18 @@ export default async function handler(req) {
           }
         );
         debug.push(`Bing: status=${bingResult.status}, length=${bingResult.text.length}`);
-        debug.push(`Bing sample: ${bingResult.text.substring(0, 500)}`);
+        const hasBalgo = bingResult.text.includes('b_algo');
+        const hasOlMain = bingResult.text.includes('id="b_results"');
+        debug.push(`Bing has b_algo: ${hasBalgo}, has b_results: ${hasOlMain}`);
+        // Get a sample around b_algo if it exists
+        const bAlgoIdx = bingResult.text.indexOf('b_algo');
+        if (bAlgoIdx > -1) {
+          debug.push(`Bing b_algo context: ${bingResult.text.substring(Math.max(0, bAlgoIdx - 20), bAlgoIdx + 300)}`);
+        } else {
+          // Show what's in the body
+          const bodyIdx = bingResult.text.indexOf('<body');
+          debug.push(`Bing body start: ${bingResult.text.substring(bodyIdx, bodyIdx + 500)}`);
+        }
         if (bingResult.status === 200) {
           reviews = parseBing(bingResult.text);
           debug.push(`Bing parsed: ${reviews.length} results`);
