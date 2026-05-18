@@ -40,12 +40,20 @@ app.post('/api/search', async (req, res) => {
 
     console.log(`[Search] Query: "${query}"`);
 
-    // Try DuckDuckGo first, then fallback
-    let reviews = await searchDuckDuckGo(query, productName);
-    
-    if (reviews.length === 0) {
-      console.log('[Search] DuckDuckGo returned 0 results, trying Bing...');
-      reviews = await searchBing(query, productName);
+    let reviews;
+
+    // Use Google Custom Search API if configured, otherwise DuckDuckGo
+    const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
+    const searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+
+    if (apiKey && searchEngineId) {
+      reviews = await searchGoogle(query, apiKey, searchEngineId);
+    } else {
+      // Fallback to DuckDuckGo (works from local machine)
+      reviews = await searchDuckDuckGo(query, productName);
+      if (reviews.length === 0) {
+        reviews = await searchBing(query, productName);
+      }
     }
 
     console.log(`[Search] Found ${reviews.length} reviews`);
@@ -59,6 +67,32 @@ app.post('/api/search', async (req, res) => {
     res.status(500).json({ error: '検索中にエラーが発生しました', details: error.message });
   }
 });
+
+/**
+ * Search using Google Custom Search API.
+ */
+async function searchGoogle(query, apiKey, searchEngineId) {
+  const reviews = [];
+  const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&num=10&lr=lang_ja&hl=ja`;
+
+  const response = await fetch(url);
+  if (!response.ok) return [];
+
+  const data = await response.json();
+  const items = data.items || [];
+
+  for (const item of items) {
+    reviews.push({
+      id: `review-${reviews.length + 1}`,
+      title: (item.title || '').slice(0, 200),
+      rating: extractRating((item.snippet || '') + ' ' + (item.title || '')),
+      summary: (item.snippet || '').slice(0, 1000),
+      url: item.link || '',
+    });
+  }
+
+  return reviews;
+}
 
 /**
  * Search DuckDuckGo HTML version and extract results.
