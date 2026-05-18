@@ -1,7 +1,7 @@
 /**
- * Vercel Serverless Function: /api/search
- * Performs web search for product reviews using DuckDuckGo Lite.
- * Uses regex-based HTML parsing (no external dependencies for Edge compatibility).
+ * Vercel Edge Function: /api/search
+ * Searches for product reviews using multiple backends.
+ * Returns debug info to help diagnose connectivity issues.
  */
 
 export const config = {
@@ -38,13 +38,74 @@ export default async function handler(req) {
     let query = `${productName} レビュー 評価`;
     if (genre) query += ` ${genre}`;
 
-    let reviews = await searchDuckDuckGoLite(query);
+    const debug = [];
 
-    if (reviews.length === 0) {
-      reviews = await searchDuckDuckGoHTML(query);
+    // Try DuckDuckGo Lite
+    let reviews = [];
+    try {
+      const ddgResult = await fetchWithDebug(
+        `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html',
+          },
+        }
+      );
+      debug.push(`DDG Lite: status=${ddgResult.status}, length=${ddgResult.text.length}`);
+      if (ddgResult.status === 200) {
+        reviews = parseDuckDuckGoLite(ddgResult.text);
+        debug.push(`DDG Lite parsed: ${reviews.length} results`);
+      }
+    } catch (e) {
+      debug.push(`DDG Lite error: ${e.message}`);
     }
 
-    return new Response(JSON.stringify({ reviews, total: reviews.length }), {
+    // Try DuckDuckGo HTML if Lite failed
+    if (reviews.length === 0) {
+      try {
+        const ddgHtml = await fetchWithDebug(
+          `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+          {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html',
+            },
+          }
+        );
+        debug.push(`DDG HTML: status=${ddgHtml.status}, length=${ddgHtml.text.length}`);
+        if (ddgHtml.status === 200) {
+          reviews = parseDuckDuckGoHTML(ddgHtml.text);
+          debug.push(`DDG HTML parsed: ${reviews.length} results`);
+        }
+      } catch (e) {
+        debug.push(`DDG HTML error: ${e.message}`);
+      }
+    }
+
+    // Try Bing as last resort
+    if (reviews.length === 0) {
+      try {
+        const bingResult = await fetchWithDebug(
+          `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&setlang=ja`,
+          {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html',
+            },
+          }
+        );
+        debug.push(`Bing: status=${bingResult.status}, length=${bingResult.text.length}`);
+        if (bingResult.status === 200) {
+          reviews = parseBing(bingResult.text);
+          debug.push(`Bing parsed: ${reviews.length} results`);
+        }
+      } catch (e) {
+        debug.push(`Bing error: ${e.message}`);
+      }
+    }
+
+    return new Response(JSON.stringify({ reviews, total: reviews.length, debug }), {
       status: 200, headers: corsHeaders,
     });
   } catch (error) {
@@ -55,59 +116,16 @@ export default async function handler(req) {
   }
 }
 
-/**
- * Search DuckDuckGo Lite and parse results with regex.
- */
-async function searchDuckDuckGoLite(query) {
-  try {
-    const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html',
-        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-      },
-    });
-
-    if (!response.ok) return [];
-    const html = await response.text();
-    return parseDuckDuckGoLite(html);
-  } catch {
-    return [];
-  }
+async function fetchWithDebug(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  return { status: response.status, text };
 }
 
-/**
- * Search DuckDuckGo HTML version as fallback.
- */
-async function searchDuckDuckGoHTML(query) {
-  try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html',
-        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-      },
-    });
-
-    if (!response.ok) return [];
-    const html = await response.text();
-    return parseDuckDuckGoHTML(html);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Parse DuckDuckGo Lite HTML results using regex.
- * Structure: <a class='result-link' href="...">Title</a> ... <td class='result-snippet'>Snippet</td>
- */
 function parseDuckDuckGoLite(html) {
   const reviews = [];
   let id = 1;
 
-  // Extract result links
   const linkRegex = /<a[^>]*class=['"]result-link['"][^>]*href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/gi;
   const snippetRegex = /<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/gi;
 
@@ -126,31 +144,24 @@ function parseDuckDuckGoLite(html) {
   for (let i = 0; i < count; i++) {
     const { href, title } = links[i];
     const snippet = snippets[i];
-
     if (!title || !snippet) continue;
-
-    let url = extractUrl(href);
 
     reviews.push({
       id: `review-${id++}`,
       title: title.slice(0, 200),
       rating: extractRating(snippet + ' ' + title),
       summary: snippet.slice(0, 1000),
-      url,
+      url: extractUrl(href),
     });
   }
 
   return reviews;
 }
 
-/**
- * Parse DuckDuckGo HTML version results.
- */
 function parseDuckDuckGoHTML(html) {
   const reviews = [];
   let id = 1;
 
-  // Match result blocks: <a class="result__a" href="...">Title</a> ... <a class="result__snippet">Snippet</a>
   const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
 
   let match;
@@ -158,10 +169,33 @@ function parseDuckDuckGoHTML(html) {
     const href = match[1];
     const title = stripHtml(match[2]).trim();
     const snippet = stripHtml(match[3]).trim();
-
     if (!title || !snippet) continue;
 
-    let url = extractUrl(href);
+    reviews.push({
+      id: `review-${id++}`,
+      title: title.slice(0, 200),
+      rating: extractRating(snippet + ' ' + title),
+      summary: snippet.slice(0, 1000),
+      url: extractUrl(href),
+    });
+  }
+
+  return reviews;
+}
+
+function parseBing(html) {
+  const reviews = [];
+  let id = 1;
+
+  // Bing results: <li class="b_algo"><h2><a href="URL">Title</a></h2>...<p>Snippet</p>
+  const resultRegex = /<li[^>]*class="b_algo"[^>]*>[\s\S]*?<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/gi;
+
+  let match;
+  while ((match = resultRegex.exec(html)) !== null && reviews.length < 50) {
+    const url = match[1];
+    const title = stripHtml(match[2]).trim();
+    const snippet = stripHtml(match[3]).trim();
+    if (!title || !snippet || !url.startsWith('http')) continue;
 
     reviews.push({
       id: `review-${id++}`,
@@ -175,35 +209,19 @@ function parseDuckDuckGoHTML(html) {
   return reviews;
 }
 
-/**
- * Extract actual URL from DuckDuckGo redirect link.
- */
 function extractUrl(href) {
-  let url = href;
-
-  // Decode HTML entities
-  url = url.replace(/&amp;/g, '&');
-
+  let url = href.replace(/&amp;/g, '&');
   if (url.includes('uddg=')) {
     try {
       const fullUrl = url.startsWith('//') ? `https:${url}` : url;
       const urlObj = new URL(fullUrl);
       url = urlObj.searchParams.get('uddg') || url;
-    } catch {
-      // Keep original
-    }
+    } catch { /* keep original */ }
   }
-
-  if (!url.startsWith('http')) {
-    url = 'https://example.com';
-  }
-
-  return decodeURIComponent(url);
+  if (!url.startsWith('http')) url = 'https://example.com';
+  try { return decodeURIComponent(url); } catch { return url; }
 }
 
-/**
- * Strip HTML tags and decode entities.
- */
 function stripHtml(html) {
   return html
     .replace(/<[^>]+>/g, '')
@@ -217,28 +235,12 @@ function stripHtml(html) {
     .trim();
 }
 
-/**
- * Extract rating from text.
- */
 function extractRating(text) {
-  const fiveScale = text.match(/(\d+\.?\d*)\s*[\/／]\s*5/);
-  if (fiveScale) {
-    const val = parseFloat(fiveScale[1]);
-    if (val >= 1 && val <= 5) return Math.round(val * 10) / 10;
-  }
-
-  const star = text.match(/[★☆]\s*(\d+\.?\d*)/);
-  if (star) {
-    const val = parseFloat(star[1]);
-    if (val >= 1 && val <= 5) return Math.round(val * 10) / 10;
-  }
-
-  const point = text.match(/(\d+\.?\d*)\s*点/);
-  if (point) {
-    const val = parseFloat(point[1]);
-    if (val >= 1 && val <= 5) return Math.round(val * 10) / 10;
-    if (val > 5 && val <= 100) return Math.round((val / 20) * 10) / 10;
-  }
-
+  const m1 = text.match(/(\d+\.?\d*)\s*[\/／]\s*5/);
+  if (m1) { const v = parseFloat(m1[1]); if (v >= 1 && v <= 5) return Math.round(v * 10) / 10; }
+  const m2 = text.match(/[★☆]\s*(\d+\.?\d*)/);
+  if (m2) { const v = parseFloat(m2[1]); if (v >= 1 && v <= 5) return Math.round(v * 10) / 10; }
+  const m3 = text.match(/(\d+\.?\d*)\s*点/);
+  if (m3) { const v = parseFloat(m3[1]); if (v >= 1 && v <= 5) return Math.round(v * 10) / 10; if (v > 5 && v <= 100) return Math.round((v / 20) * 10) / 10; }
   return 3.5;
 }
