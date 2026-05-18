@@ -92,10 +92,12 @@ export default async function handler(req) {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'Accept': 'text/html',
+              'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
             },
           }
         );
         debug.push(`Bing: status=${bingResult.status}, length=${bingResult.text.length}`);
+        debug.push(`Bing sample: ${bingResult.text.substring(0, 500)}`);
         if (bingResult.status === 200) {
           reviews = parseBing(bingResult.text);
           debug.push(`Bing parsed: ${reviews.length} results`);
