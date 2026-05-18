@@ -1,6 +1,7 @@
 /**
  * Vercel Serverless Function: /api/search
- * Performs web scraping for product reviews via DuckDuckGo/Bing.
+ * Performs web search for product reviews using multiple search backends.
+ * Tries SearXNG public instances, then DuckDuckGo, then Bing as fallbacks.
  */
 
 import * as cheerio from 'cheerio';
@@ -31,8 +32,18 @@ export default async function handler(req, res) {
       query += ` ${genre}`;
     }
 
-    let reviews = await searchDuckDuckGo(query, productName);
+    // Try multiple search backends
+    let reviews = [];
 
+    // 1. Try SearXNG (open source, no bot blocking)
+    reviews = await searchSearXNG(query, productName);
+
+    // 2. Fallback to DuckDuckGo
+    if (reviews.length === 0) {
+      reviews = await searchDuckDuckGo(query, productName);
+    }
+
+    // 3. Fallback to Bing
     if (reviews.length === 0) {
       reviews = await searchBing(query, productName);
     }
@@ -47,111 +58,177 @@ export default async function handler(req, res) {
   }
 }
 
+/**
+ * Search using SearXNG public instances (JSON API).
+ * SearXNG is open source and doesn't block server requests.
+ */
+async function searchSearXNG(query, productName) {
+  const instances = [
+    'https://search.sapti.me',
+    'https://searx.tiekoetter.com',
+    'https://search.bus-hit.me',
+    'https://searx.be',
+  ];
+
+  for (const instance of instances) {
+    try {
+      const encodedQuery = encodeURIComponent(query);
+      const url = `${instance}/search?q=${encodedQuery}&format=json&language=ja&categories=general`;
+
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      if (!data.results || data.results.length === 0) continue;
+
+      const reviews = data.results
+        .filter(r => r.title && r.url && r.content)
+        .slice(0, 50)
+        .map((r, i) => ({
+          id: `review-${i + 1}`,
+          title: r.title.slice(0, 200),
+          rating: extractRating(r.content + ' ' + r.title),
+          summary: (r.content || '').slice(0, 1000),
+          url: r.url,
+        }));
+
+      if (reviews.length > 0) return reviews;
+    } catch {
+      // Try next instance
+      continue;
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Search DuckDuckGo HTML version and extract results.
+ */
 async function searchDuckDuckGo(query, productName) {
-  const encodedQuery = encodeURIComponent(query);
-  const url = `https://html.duckduckgo.com/html/?q=${encodedQuery}`;
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const url = `https://html.duckduckgo.com/html/?q=${encodedQuery}`;
 
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-    },
-  });
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
 
-  if (!response.ok) return [];
+    if (!response.ok) return [];
 
-  const html = await response.text();
-  const $ = cheerio.load(html);
-  const reviews = [];
-  let id = 1;
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const reviews = [];
+    let id = 1;
 
-  $('.result, .results_links').each((_, element) => {
-    if (reviews.length >= 50) return false;
+    $('.result, .results_links').each((_, element) => {
+      if (reviews.length >= 50) return false;
 
-    const titleEl = $(element).find('.result__title a, .result__a').first();
-    const snippetEl = $(element).find('.result__snippet').first();
-    const urlEl = $(element).find('.result__url').first();
+      const titleEl = $(element).find('.result__title a, .result__a').first();
+      const snippetEl = $(element).find('.result__snippet').first();
+      const urlEl = $(element).find('.result__url').first();
 
-    const title = titleEl.text().trim();
-    const link = titleEl.attr('href') || '';
-    const snippet = snippetEl.text().trim();
-    const displayUrl = urlEl.text().trim();
+      const title = titleEl.text().trim();
+      const link = titleEl.attr('href') || '';
+      const snippet = snippetEl.text().trim();
+      const displayUrl = urlEl.text().trim();
 
-    if (title && snippet) {
-      let actualUrl = link;
-      if (link.includes('uddg=')) {
-        try {
-          const urlParam = new URL(link, 'https://duckduckgo.com');
-          actualUrl = urlParam.searchParams.get('uddg') || link;
-        } catch {
-          actualUrl = link;
+      if (title && snippet) {
+        let actualUrl = link;
+        if (link.includes('uddg=')) {
+          try {
+            const urlParam = new URL(link, 'https://duckduckgo.com');
+            actualUrl = urlParam.searchParams.get('uddg') || link;
+          } catch {
+            actualUrl = link;
+          }
         }
+        if (!actualUrl.startsWith('http')) {
+          actualUrl = `https://${displayUrl || 'example.com'}`;
+        }
+
+        reviews.push({
+          id: `review-${id++}`,
+          title: title.slice(0, 200),
+          rating: extractRating(snippet + ' ' + title),
+          summary: snippet.slice(0, 1000),
+          url: actualUrl,
+        });
       }
-      if (!actualUrl.startsWith('http')) {
-        actualUrl = `https://${displayUrl || 'example.com'}`;
-      }
+    });
 
-      const rating = extractRating(snippet + ' ' + title);
-
-      reviews.push({
-        id: `review-${id++}`,
-        title: title.slice(0, 200),
-        rating,
-        summary: snippet.slice(0, 1000),
-        url: actualUrl,
-      });
-    }
-  });
-
-  return reviews;
+    return reviews;
+  } catch {
+    return [];
+  }
 }
 
+/**
+ * Search Bing and extract results as fallback.
+ */
 async function searchBing(query, productName) {
-  const encodedQuery = encodeURIComponent(query);
-  const url = `https://www.bing.com/search?q=${encodedQuery}&count=20&setlang=ja`;
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const url = `https://www.bing.com/search?q=${encodedQuery}&count=20&setlang=ja`;
 
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-    },
-  });
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
 
-  if (!response.ok) return [];
+    if (!response.ok) return [];
 
-  const html = await response.text();
-  const $ = cheerio.load(html);
-  const reviews = [];
-  let id = 1;
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const reviews = [];
+    let id = 1;
 
-  $('li.b_algo').each((_, element) => {
-    if (reviews.length >= 50) return false;
+    $('li.b_algo').each((_, element) => {
+      if (reviews.length >= 50) return false;
 
-    const titleEl = $(element).find('h2 a').first();
-    const snippetEl = $(element).find('.b_caption p, .b_algoSlug').first();
+      const titleEl = $(element).find('h2 a').first();
+      const snippetEl = $(element).find('.b_caption p, .b_algoSlug').first();
 
-    const title = titleEl.text().trim();
-    const link = titleEl.attr('href') || '';
-    const snippet = snippetEl.text().trim();
+      const title = titleEl.text().trim();
+      const link = titleEl.attr('href') || '';
+      const snippet = snippetEl.text().trim();
 
-    if (title && link && snippet) {
-      const rating = extractRating(snippet + ' ' + title);
+      if (title && link && snippet) {
+        reviews.push({
+          id: `review-${id++}`,
+          title: title.slice(0, 200),
+          rating: extractRating(snippet + ' ' + title),
+          summary: snippet.slice(0, 1000),
+          url: link,
+        });
+      }
+    });
 
-      reviews.push({
-        id: `review-${id++}`,
-        title: title.slice(0, 200),
-        rating,
-        summary: snippet.slice(0, 1000),
-        url: link,
-      });
-    }
-  });
-
-  return reviews;
+    return reviews;
+  } catch {
+    return [];
+  }
 }
 
+/**
+ * Extract a rating value from text content.
+ */
 function extractRating(text) {
   const fiveScaleMatch = text.match(/(\d+\.?\d*)\s*[\/／]\s*5/);
   if (fiveScaleMatch) {
